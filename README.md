@@ -1,23 +1,93 @@
-# acvp-vectors
+# test-vectors
 
-ACVP-server (https://github.com/usnistgov/ACVP-Server)
-is a great source of test vectors for cryptographic software.
-However, it's unnecessarily big, hosting raw JSON files.
+Cryptographic test vectors, mirrored from their upstream repositories and
+compressed with gzip.
 
-The fork optimizes repo size from from 1GB to ~350MB by using gzip compression and
-removing unused files.
+Optimized for **git clone**: 5x faster than upstream.
 
-To reproduce:
+| Directory | Upstream | Pin |
+| --- | --- | --- |
+| `acvp/` | [usnistgov/ACVP-Server](https://github.com/usnistgov/ACVP-Server) | `v1.1.0.43` (`975de31eb83d`) |
+| `wycheproof/testvectors_v1/` | [C2SP/wycheproof](https://github.com/C2SP/wycheproof) | `dac1dd4729fd` |
+| `rfc/6979-deterministic-ecdsa/` | [RFC 6979](https://www.rfc-editor.org/rfc/rfc6979.txt) Appendix A.2 | text sha256 |
+| `rfc/8032-eddsa/` | [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.txt) Section 7 | text sha256 |
+| `rfc/9380-hash-to-curve/` | [cfrg/draft-irtf-cfrg-hash-to-curve](https://github.com/cfrg/draft-irtf-cfrg-hash-to-curve) `poc/vectors` | `664b13592116` |
+| `rfc/9497-oprf/` | [RFC 9497](https://www.rfc-editor.org/rfc/rfc9497.txt) Appendix A | text sha256 |
+| `rfc/9591-frost/` | [ZcashFoundation/frost](https://github.com/ZcashFoundation/frost) `frost-*/tests/helpers` | `0966bd1529aa` |
 
-    git clone https://github.com/usnistgov/ACVP-Server
-    cd ACVP-Server
-    rm -rf .github _config docs gen-val/samples gen-val/src
-    find gen-val/json-files -iname '*.json' -exec gzip {} \;
+Every vector file is stored as `<name>.json.gz`. Notes:
 
-## License
+- RFC 6979 / 8032 / 9497 vectors are parsed straight from the immutable RFC
+  texts by `scripts/rfc/*.js`.
+- RFC 9591 vectors come from the FROST reference implementation: RFC appendix
+  vectors plus DKG, repair-share, serialization, and the non-RFC
+  `secp256k1-tr` (BIP-340) suite.
+- In `rfc/9380-hash-to-curve/`, `:` in suite names is replaced with `_` for
+  Windows checkouts. Wycheproof's deleted legacy `testvectors/` is not
+  mirrored.
 
-NIST-developed software is provided by NIST as a public service. You may use, copy, and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify, and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+## Usage
 
-NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT, OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+```sh
+git submodule add --depth 1 https://github.com/paulmillr/acvp-vectors.git \
+  test/vectors/large
 
-You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+git config -f .gitmodules submodule.test/vectors/large.shallow true
+```
+
+Read vectors with `utils.js` (dependency-free, typed via `utils.d.ts`):
+
+```js
+import { jsonGZ, jsonGZGroups } from './test/vectors/large/utils.js';
+
+// whole file
+const tests = jsonGZ('test/vectors/large/wycheproof/testvectors_v1/ed25519_test.json.gz');
+// one testGroup at a time, bounded memory
+for await (const group of jsonGZGroups('test/vectors/large/acvp/ML-DSA-sigGen-FIPS204/prompt.json.gz')) {}
+```
+
+Both accept a path string or file URL and also read uncompressed `.json`.
+
+## Reproduce the vector trees
+
+Each kind has a build script (Node >= 18 plus `git`, no dependencies) that
+rebuilds its directory from the pinned upstream ref — commits are exact, tags
+are verified against expected hashes, RFC texts are pinned by sha256. Gzip
+output is deterministic (fixed header, Node zlib, max level). Upstream clones
+are cached in `$TMPDIR/test-vectors-upstream` (override: `VECTORS_CACHE`), so
+only the first run clones:
+
+```sh
+node scripts/acvp.js        # rebuilds acvp/
+node scripts/wycheproof.js  # rebuilds wycheproof/
+node scripts/rfc.js         # rebuilds rfc/
+```
+
+Each kind carries a `SHA256SUMS` manifest of **decompressed** content, written
+by its build script. It is independent of gzip container bytes: hashes compare
+directly against upstream's raw files, and a pin-bump diff shows which vectors
+actually changed. Verify all files:
+
+```sh
+npm run verify
+```
+
+## Clone benchmark
+
+Measured using `git clone --depth 1` on the same host.
+
+| Repository | Clone time | Checkout size |
+| --- | ---: | ---: |
+| `usnistgov/ACVP-Server` + Wycheproof | 53 s | 1.45 GB |
+| this repository | 19.2 s | 745 MB |
+
+## Licenses
+
+Vectors keep their upstream licenses; see [LICENSE](./LICENSE):
+[Apache-2.0](https://github.com/C2SP/wycheproof/blob/master/LICENSE)
+(wycheproof), NIST license (acvp),
+[IETF Trust](https://trustee.ietf.org/documents/trust-legal-provisions/)
+(RFC-text vectors), MIT/Apache-2.0
+([frost](https://github.com/ZcashFoundation/frost#license)),
+[CFRG draft repo terms](https://github.com/cfrg/draft-irtf-cfrg-hash-to-curve)
+(hash-to-curve).
